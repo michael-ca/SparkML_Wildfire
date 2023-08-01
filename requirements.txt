@@ -3,7 +3,7 @@ streamlit
 numpy
 seaborn
 matplotlib
-scikit-learn==0.22.1
 plotly
 Pillow
 xgboost
+scikit-learn
