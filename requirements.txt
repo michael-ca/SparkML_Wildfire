@@ -3,6 +3,6 @@ streamlit
 numpy
 seaborn
 matplotlib
-PIL
 sklearn
 plotly
+Pillow
