@@ -7,129 +7,132 @@ import os
 import matplotlib
 import matplotlib.pyplot as plt
 from PIL import Image
-
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.ensemble import RandomForestRegressor
-from xgboost import XGBRegressor
-
-from sklearn import metrics
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.preprocessing import StandardScaler
 import plotly.express as px
 
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml.regression import DecisionTreeRegressor
+from pyspark.ml.regression import GBTRegressor
+from pyspark.ml.regression import RandomForestRegressor
+from pyspark.ml.regression import FMRegressor
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml.regression import LinearRegression
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import udf
+from pyspark.sql.types import FloatType, IntegerType
+from pyspark.ml import Pipeline
+from pyspark.ml.feature import OneHotEncoder
+from pyspark.ml.feature import MinMaxScaler
+from pyspark.ml.feature import VectorAssembler, StringIndexer
+from pyspark.ml.tuning import ParamGridBuilder, TrainValidationSplit
 
-@st.cache_data
+sc = SparkSession.builder.appName('wildfire_sparkml').getOrCreate()
+sc.sparkContext.setLogLevel("ERROR")
+
+
 def loadData():
-	df = pd.read_csv("./fire_data.csv")
+	df = sc.read.csv("./fire_data.csv", inferSchema=True, header=True)
 	return df
+
 
 # Pre-processing the data
 def preprocessing(df):
-	# Assign X and y
-	X = df.iloc[:, :-1].values
-	y = df.iloc[:, -1].values
-
+	df = df.na.drop(how="any")
+	va = VectorAssembler(inputCols=['SR_B3', 'NBR', 'NDMI', 'NDSI', 'NDVI', 'SR_B5', 'SR_B4', 'SR_B7', 'SR_B6','NDMI_cat', 'NDVI_cat', 'SR_avg'], outputCol='features')
+	df2 = va.transform(df)
+	df2x = df2.select(['features', 'Fire_Observed'])
+	df2 = df2x.withColumnRenamed("features", "features")
+	df2 = df2.withColumnRenamed("Fire_Observed", "label")
+	splits = df2.randomSplit([0.7, 0.3], seed=12345)
 	# Splitting into train and test sets
-	X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.30, random_state=42, stratify=y)
-	return X_train, X_test, y_train, y_test
+	train_df = splits[0]
+	test_df = splits[1]
+
+	return train_df, test_df
 
 
-# Training using different ML Models
+# Training using different Spark ML Models
 # DecisionTree Regressor
-@st.cache_data
-def decisionTree(X_train, X_test, y_train, y_test):
+def decisionTree(train_df, test_df):
 	# Train the model
-	tree = DecisionTreeRegressor()
-	tree.fit(X_train, y_train)
+	dtree = DecisionTreeRegressor(featuresCol='features', labelCol='label')
+	dtree_model = dtree.fit(train_df)
+	dtPrediction = dtree_model.transform(test_df)
+	dt_evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="label", metricName="rmse")
+	dtree_rmse = dt_evaluator.evaluate(dtPrediction)
 
-	y_pred = tree.predict(X_test)
-	tree_mse = mean_squared_error(y_test, y_pred)
-	tree_rmse = np.sqrt(tree_mse)
+	return dtree, dtree_rmse, dtree_model
 
-	return tree, tree_rmse
+# Training Linear Regressor
+def linear_Regressor(train_df, test_df):
+	lr = LinearRegression(featuresCol='features', labelCol='label')
+	lr_model = lr.fit(train_df)
+	fullPredictions = lr_model.transform(test_df)
+	lr_evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="label", metricName="rmse")
+	lr_rmse = lr_evaluator.evaluate(fullPredictions)
 
-# Training KNN Regressor
-@st.cache_data
-def Knn_Regressor(X_train, X_test, y_train, y_test):
-	knn_reg = KNeighborsRegressor()
-	knn_reg.fit(X_train, y_train)
-
-	y_pred = knn_reg.predict(X_test)
-	knn_mse = mean_squared_error(y_test, y_pred)
-	knn_rmse = np.sqrt(knn_mse)
-
-	return knn_reg, knn_rmse
+	return lr, lr_rmse, lr_model
 
 # Training Random Forest Regressor
-@st.cache_data
-def Random_Forest_Regressor(X_train, X_test, y_train, y_test):
-	rf_reg = RandomForestRegressor()
-	rf_reg.fit(X_train, y_train)
+def Random_Forest_Regressor(train_df, test_df):
+	rf = RandomForestRegressor(featuresCol='features', labelCol='label')
+	rf_model = rf.fit(train_df)
+	rfPredictions = rf_model.transform(test_df)
+	rf_evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="label", metricName="rmse")
+	rf_rmse = rf_evaluator.evaluate(rfPredictions)
 
-	y_pred = rf_reg.predict(X_test)
-	rf_mse = mean_squared_error(y_test, y_pred)
-	rf_rmse = np.sqrt(rf_mse)
-
-	return rf_reg, rf_rmse
+	return rf, rf_rmse, rf_model
 
 # Training Gradient Boost Regressor
-@st.cache_data
-def Gradient_Boost_Regressor(X_train, X_test, y_train, y_test):
-	xgb_reg = XGBRegressor()
-	xgb_reg.fit(X_train, y_train)
+def Gradient_Boost_Regressor(train_df, test_df):
+	gb = GBTRegressor(featuresCol='features', labelCol='label')
+	gb_model = gb.fit(train_df)
+	gbPredictions = gb_model.transform(test_df)
+	gb_evaluator = RegressionEvaluator(predictionCol="prediction", labelCol="label", metricName="rmse")
+	gb_rmse = gb_evaluator.evaluate(gbPredictions)
 
-	y_pred = xgb_reg.predict(X_test)
-	xgb_mse = mean_squared_error(y_test, y_pred)
-	xgb_rmse = np.sqrt(xgb_mse)
-
-	return xgb_reg, xgb_rmse
-
+	return gb, gb_rmse, gb_model
 
 
 # Accepting user data for prediction
 def accept_user_data():
 	file_upload = st.file_uploader("Upload csv file for predictions", type=["csv"])
 	if file_upload is not None:
-		user_data = pd.read_csv(file_upload)
-		user_data = user_data.dropna()
-		user_data_1 = user_data.iloc[:, :2]
-		user_data_2 = user_data.iloc[:,2:]
+		user_data = sc.read_csv(file_upload, inferSchema=True, header=True)
+		user_data = user_data.na.drop(how="any")
+		va = VectorAssembler(inputCols=['SR_B3', 'NBR', 'NDMI', 'NDSI', 'NDVI', 'SR_B5', 'SR_B4', 'SR_B7', 'SR_B6', 'NDMI_cat', 'NDVI_cat', 'SR_avg'], outputCol='features')
+		user_data_final = va.transform(user_data)
+		user_data_final_x = user_data_final.select(['features'])
 
-	return user_data_1, user_data_2
+	return user_data_final_x
 
 
 def main():
-	st.title("Prediction of Wild Fires using various ML Algorithms")
+	st.title("Prediction of Wild Fires (Spark ML)")
 	image = Image.open('./raster_pic.png')
 	st.image(image, use_column_width=True)
 	data = loadData()
-	X_train, X_test, y_train, y_test = preprocessing(data)
+	train_df, test_df = preprocessing(data)
 
 	# Insert Check-Box to show the snippet of the data.
 	if st.checkbox('Show Raw Data'):
 		st.subheader("Showing raw data---->>>")
 		st.subheader("Top 100 rows")
-		st.write(data.head(100))
+		st.write(data)
 		st.subheader("Rows where fires were observed")
-		st.write(data[data.Fire_Observed == 1])
+		data_only_fires = data.filter(data["Fire_Observed"] == 1)
+		st.write(data_only_fires)
 
-		fig, ax = plt.subplots()
-		sns.heatmap(data.corr().round(4), ax=ax)
+		df_viz = data.toPandas()
 		st.subheader("Correlation Map")
-		st.write(fig)
+		st.write(df_viz.corr().style.background_gradient(cmap='coolwarm').set_precision(2))
 
 
-
-	# ML Section
+	# Spark ML Section
 	choose_model = st.sidebar.selectbox("Choose the ML Model",
-		["NONE","Decision Tree", "K-Nearest Neighbours", "Random Forest Regressor", "Gradient Boost Regressor"])
+		["NONE","Decision Tree", "Linear Regressor", "Random Forest Regressor", "Gradient Boost Regressor"])
 
 	if(choose_model == "Decision Tree"):
-		tree, tree_rmse = decisionTree(X_train, X_test, y_train, y_test)
+		tree, tree_rmse, tree_model = decisionTree(train_df, test_df)
 		st.text("RMSE of Decision Tree model is: ")
 		st.write(tree_rmse)
 		if (st.checkbox("Predict on your own Input? Please upload the csv file")):
@@ -137,34 +140,52 @@ def main():
 			if file_upload is not None:
 				user_data = pd.read_csv(file_upload)
 				user_data = user_data.dropna()
-				user_data_1 = user_data.iloc[:, :2]
-				user_data_2 = user_data.iloc[:, 2:]
-				st.write(user_data_2.values)
-				st.write(user_data_2.shape)
-				st.text("Forest Fire prediction: ")
-				st.write(tree.predict(user_data_2.values))
-				st.write(tree.predict(user_data_2.values).shape)
+				user_data_1 = sc.createDataFrame(user_data)
+				va = VectorAssembler(inputCols=['SR_B3', 'NBR', 'NDMI', 'NDSI', 'NDVI', 'SR_B5', 'SR_B4', 'SR_B7', 'SR_B6', 'NDMI_cat', 'NDVI_cat', 'SR_avg'], outputCol='features')
+				user_data_final_1 = va.transform(user_data_1)
+				user_data_final_1_x = user_data_final_1.select(['features'])
+				user_data_final_1_x.show(100)
+				st.text("Sample file")
+				st.write(user_data)
+				st.write(user_data.shape)
+				tree_predictions = tree_model.transform(user_data_final_1_x)
+				tree_predictions.show(100)
+				tree_predictions_1 = tree_predictions.select("prediction")
+				st.text("Fire Risk Prediction")
+				st.write(tree_predictions_1)
+				st.write(tree_predictions_1.count())
+				tree_predictions.write.mode('overwrite').parquet("./dTreePredictions.parquet")
+				st.text("Predictions successfully written to parquet file")
 
-	elif(choose_model == "K-Nearest Neighbours"):
-		knn_reg, knn_rmse = Knn_Regressor(X_train, X_test, y_train, y_test)
-		st.text("RMSE of K-Nearest Neighbour model is: ")
-		st.write(knn_rmse)
+	elif(choose_model == "Linear Regressor"):
+		lin_reg, lin_rmse, lin_model = linear_Regressor(train_df, test_df)
+		st.text("RMSE of Linear Regressor model is: ")
+		st.write(lin_rmse)
 		if (st.checkbox("Predict on your own Input? Please upload the csv file")):
 			file_upload = st.file_uploader("Upload csv file for predictions", type=["csv"])
 			if file_upload is not None:
 				user_data = pd.read_csv(file_upload)
 				user_data = user_data.dropna()
-				user_data_3 = user_data.iloc[:, :2]
-				user_data_4 = user_data.iloc[:, 2:]
-				st.write(user_data_4.values)
-				st.write(user_data_4.shape)
-				st.text("Forest Fire prediction: ")
-				st.write(knn_reg.predict(user_data_4.values))
-				st.write(knn_reg.predict(user_data_4.values).shape)
+				user_data_2 = sc.createDataFrame(user_data)
+				va = VectorAssembler(inputCols=['SR_B3', 'NBR', 'NDMI', 'NDSI', 'NDVI', 'SR_B5', 'SR_B4', 'SR_B7', 'SR_B6', 'NDMI_cat','NDVI_cat', 'SR_avg'], outputCol='features')
+				user_data_final_2 = va.transform(user_data_2)
+				user_data_final_2_x = user_data_final_2.select(['features'])
+				user_data_final_2_x.show(100)
+				st.text("Sample file")
+				st.write(user_data)
+				st.write(user_data.shape)
+				lin_predictions = lin_model.transform(user_data_final_2_x)
+				lin_predictions.show(100)
+				lin_predictions_1 = lin_predictions.select("prediction")
+				st.text("Fire Risk Prediction")
+				st.write(lin_predictions_1)
+				st.write(lin_predictions_1.count())
+				lin_predictions.write.mode('overwrite').parquet("./linPredictions.parquet")
+				st.text("Predictions successfully written to parquet file")
 
 
 	elif (choose_model == "Random Forest Regressor"):
-		rf_reg, rf_rmse = Random_Forest_Regressor(X_train, X_test, y_train, y_test)
+		rf_reg, rf_rmse, rf_model = Random_Forest_Regressor(train_df, test_df)
 		st.text("RMSE of Random Forest model is: ")
 		st.write(rf_rmse)
 		if (st.checkbox("Predict on your own Input? Please upload the csv file")):
@@ -172,16 +193,26 @@ def main():
 			if file_upload is not None:
 				user_data = pd.read_csv(file_upload)
 				user_data = user_data.dropna()
-				user_data_5 = user_data.iloc[:, :2]
-				user_data_6 = user_data.iloc[:, 2:]
-				st.write(user_data_6.values)
-				st.write(user_data_6.shape)
-				st.text("Forest Fire prediction: ")
-				st.write(rf_reg.predict(user_data_6.values))
-				st.write(rf_reg.predict(user_data_6.values).shape)
+				user_data_3 = sc.createDataFrame(user_data)
+				va = VectorAssembler(inputCols=['SR_B3', 'NBR', 'NDMI', 'NDSI', 'NDVI', 'SR_B5', 'SR_B4', 'SR_B7', 'SR_B6', 'NDMI_cat', 'NDVI_cat', 'SR_avg'], outputCol='features')
+				user_data_final_3 = va.transform(user_data_3)
+				user_data_final_3_x = user_data_final_3.select(['features'])
+				user_data_final_3_x.show(100)
+				st.text("Sample file")
+				st.write(user_data)
+				st.write(user_data.shape)
+				rf_predictions = rf_model.transform(user_data_final_3_x)
+				rf_predictions.show(100)
+				rf_predictions_1 = rf_predictions.select("prediction")
+				st.text("Fire Risk Prediction")
+				st.write(rf_predictions_1)
+				st.write(rf_predictions_1.count())
+				rf_predictions.write.mode('overwrite').parquet("./rfPredictions.parquet")
+				st.text("Predictions successfully written to parquet file")
+
 
 	elif (choose_model == "Gradient Boost Regressor"):
-		xgb_reg, xgb_rmse = Gradient_Boost_Regressor(X_train, X_test, y_train, y_test)
+		xgb_reg, xgb_rmse, xgb_model = Gradient_Boost_Regressor(train_df, test_df)
 		st.text("RMSE of Gradient Boost model is: ")
 		st.write(xgb_rmse)
 		if (st.checkbox("Predict on your own Input? Please upload the csv file")):
@@ -189,14 +220,38 @@ def main():
 			if file_upload is not None:
 				user_data = pd.read_csv(file_upload)
 				user_data = user_data.dropna()
-				user_data_7 = user_data.iloc[:, :2]
-				user_data_8 = user_data.iloc[:, 2:]
-				st.write(user_data_8.values)
-				st.write(user_data_8.shape)
-				st.text("Forest Fire prediction: ")
-				st.write(xgb_reg.predict(user_data_8.values))
-				st.write(xgb_reg.predict(user_data_8.values).shape)
+				user_data_4 = sc.createDataFrame(user_data)
+				va = VectorAssembler(inputCols=['SR_B3', 'NBR', 'NDMI', 'NDSI', 'NDVI', 'SR_B5', 'SR_B4', 'SR_B7', 'SR_B6', 'NDMI_cat', 'NDVI_cat', 'SR_avg'], outputCol='features')
+				user_data_final_4 = va.transform(user_data_4)
+				user_data_final_4_x = user_data_final_4.select(['features'])
+				user_data_final_4_x.show(100)
+				st.text("Sample file")
+				st.write(user_data)
+				st.write(user_data.shape)
+				xgb_predictions = xgb_model.transform(user_data_final_4_x)
+				xgb_predictions.show(100)
+				xgb_predictions_1 = xgb_predictions.select("prediction")
+				st.text("Fire Risk Prediction")
+				st.write(xgb_predictions_1)
+				st.write(xgb_predictions_1.count())
+				xgb_predictions.write.mode('overwrite').parquet("./xgbPredictions.parquet")
+				st.text("Predictions successfully written to parquet file")
 
+	choose_image = st.sidebar.selectbox("See output images",
+										["NONE", "Image 1", "Image 2", "Image 3"])
+
+	if (choose_image == "Image 1"):
+		st.text("Prediction of Wild Fires in British Colombia")
+		image2 = Image.open('./output_1.png')
+		st.image(image2, use_column_width=True)
+	elif (choose_image == "Image 2"):
+		st.text("Prediction of Wild Fires in British Colombia (Zoomed in)")
+		image3 = Image.open('./output_2.png')
+		st.image(image3, use_column_width=True)
+	elif (choose_image == "Image 3"):
+		st.text("Prediction of Wild Fires near a river")
+		image4 = Image.open('./output_3.png')
+		st.image(image4, use_column_width=True)
 
 if __name__ == "__main__":
 	main()
