@@ -1,2 +1,2 @@
-# WildFireML
-To predict wildfires using ML models.
+# WildFire Spark ML
+To predict wildfires using Spark ML
