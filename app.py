@@ -124,7 +124,7 @@ def main():
 
 		df_viz = data.toPandas()
 		st.subheader("Correlation Map")
-		st.write(df_viz.corr().style.background_gradient(cmap='coolwarm').set_precision(2))
+		st.write(df_viz.corr().style.background_gradient(cmap='coolwarm'))
 
 
 	# Spark ML Section
